@@ -2,17 +2,17 @@ import networkx as nx
 from random import shuffle
 from random import random
 import numpy as np
-import math
-from pysmiles import read_smiles
-from pubchempy import get_compounds, Compound
+# from pubchempy import get_compounds, Compound
+from RDkit.rdkit import Chem
 
-def read_molecule_from_pubchem_id(pubchem_id:str) -> nx.Graph:
-    mol = Compound.from_cid(pubchem_id)
-    return read_molecule(mol.canonical_smiles)
+# def read_molecule_from_pubchem_id(pubchem_id:str) -> nx.Graph:
+#     mol = Compound.from_cid(pubchem_id)
+#     return read_molecule(mol.canonical_smiles)
     
 
-def read_molecule(smiles_rep: str) -> nx.Graph :
-    G = read_smiles(smiles_rep)
+def read_molecule(smiles_rep: str):
+    # G = read_smiles(smiles_rep)
+    G = Chem.MolFromSmiles(smiles_rep)
     return G
 
 def sequence_on_graph(G: nx.Graph):
