@@ -3,13 +3,13 @@ from random import shuffle
 from random import random
 import numpy as np
 import math
-# from pubchempy import get_compounds, Compound
+from pubchempy import get_compounds, Compound
 from RDkit.rdkit import Chem
 from RDkit.rdkit.Chem import rdchem
 
-# def read_molecule_from_pubchem_id(pubchem_id:str) -> nx.Graph:
-#     mol = Compound.from_cid(pubchem_id)
-#     return read_molecule(mol.canonical_smiles)
+def read_molecule_from_pubchem_id(pubchem_id:str) -> nx.Graph:
+    mol = Compound.from_cid(pubchem_id)
+    return read_molecule_mol(mol.canonical_smiles)
     
 def mol_to_nx(mol: rdchem.Mol) -> nx.Graph:
     '''
@@ -27,7 +27,7 @@ def mol_to_nx(mol: rdchem.Mol) -> nx.Graph:
                    hybridization=atom.GetHybridization(),
                    num_explicit_hs=atom.GetNumExplicitHs(),
                    is_aromatic=atom.GetIsAromatic())
-    for bond in mol.GetBonds():
+    for bond in mol.xGetBonds():
         G.add_edge(bond.GetBeginAtomIdx(),
                    bond.GetEndAtomIdx(),
                    bond_type=bond.GetBondType())
@@ -69,10 +69,15 @@ def nx_to_mol(G):
     Chem.SanitizeMol(mol)
     return mol
 
-def read_molecule(smiles_rep: str) -> nx.Graph:
+def read_molecule_nx(smiles_rep: str) -> nx.Graph:
     # G = read_smiles(smiles_rep)
     G = Chem.MolFromSmiles(smiles_rep)
     return mol_to_nx(G)
+
+def read_molecule_mol(smiles_rep: str) -> rdchem.Mol:
+    # G = read_smiles(smiles_rep)
+    G = Chem.MolFromSmiles(smiles_rep)
+    return G
 
 def sequence_on_graph(G: nx.Graph):
     '''
@@ -193,3 +198,21 @@ def valid_molecule(G: nx.Graph) -> bool :
             if count-node_attr_dict['charge'] != 2:
                 return False
     return valid
+
+def construct_graph(node_ordering,edge_ordering):
+    G = nx.Graph()
+    new_edge_ordering = []
+    for edge_list in edge_ordering:
+        for edge in edge_list:
+            new_edge_ordering.append(tuple(edge))
+    G.add_nodes_from(node_ordering)
+    G.add_edges_from(new_edge_ordering)
+    return G
+
+def generate_sequence_from_graph(G: nx.Graph,node_ordering,edge_ordering) -> nx.Graph:
+    G_ = nx.Graph()
+    for i,node in enumerate(node_ordering):
+        G_.add_nodes_from([(node,G.nodes[node])])
+        for edge in edge_ordering[i]:
+            G_.add_edges_from( [ (edge[0],edge[1],G.edges[edge]) ] )
+    return G_
