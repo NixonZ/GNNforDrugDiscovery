@@ -27,14 +27,22 @@ def mol_to_nx(mol: rdchem.Mol) -> nx.Graph:
                    hybridization=atom.GetHybridization(),
                    num_explicit_hs=atom.GetNumExplicitHs(),
                    is_aromatic=atom.GetIsAromatic())
-    for bond in mol.xGetBonds():
+    for bond in mol.GetBonds():
         G.add_edge(bond.GetBeginAtomIdx(),
                    bond.GetEndAtomIdx(),
-                   bond_type=bond.GetBondType())
+                   bond_type=bond.GetBondType(),
+                   is_aromatic=bond.GetIsAromatic(),
+                   conjugation=bond.GetIsConjugated(),
+                   stereochemistry=bond.GetStereo(),
+                   bond_dir=bond.GetBondDir(),
+                   is_ring=bond.IsInRing(),
+                   is_in_ring_size_5=bond.IsInRingSize(5),
+                   is_in_ring_size_6=bond.IsInRingSize(6),
+                   is_in_ring_size_3=bond.IsInRingSize(3),
+                   is_in_ring_size_7=bond.IsInRingSize(7))
     return G
 
-
-def nx_to_mol(G):
+def nx_to_mol(G: nx.Graph) -> rdchem.Mol:
     '''
     @source: https://github.com/dakoner/keras-molecules/blob/dbbb790e74e406faa70b13e8be8104d9e938eba2/convert_rdkit_to_networkx.py
     input: A networX graph representation of a molecule
