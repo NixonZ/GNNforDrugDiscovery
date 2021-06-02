@@ -6,6 +6,7 @@ import math
 from pubchempy import get_compounds, Compound
 from RDkit.rdkit import Chem
 from RDkit.rdkit.Chem import rdchem
+from data import bond_types
 
 def read_molecule_from_pubchem_id(pubchem_id:str) -> nx.Graph:
     mol = Compound.from_cid(pubchem_id)
@@ -93,10 +94,7 @@ def sequence_on_graph(G: nx.Graph):
     input: A grapg G of type nx.Graph()
     Output: List of nodes in order of node ordering and a list of list of tuples of edge orders.
     '''
-    nodes = list(G.nodes())    
-    # for (n,nbrdict) in G.adjacency():
-        # for adjacent_n in nbrdict.keys():
-        # nodes.append(n)
+    nodes = list(G.nodes())
     shuffle(nodes)
     ordering = set()
     edge_ordering = []
@@ -106,10 +104,10 @@ def sequence_on_graph(G: nx.Graph):
         edge_list = G[node]
         for adjacent_node in edge_list:
             if adjacent_node in ordering:
-                sub_ordering.append((node,adjacent_node))
+                sub_ordering.append((node,adjacent_node,bond_types[str(G[node][adjacent_node]['bond_type'])]))
         shuffle(sub_ordering)
         edge_ordering.append(sub_ordering)
-    return (nodes,edge_ordering)
+    return ([ (node,G.nodes(data=True)[node]['atomic_num']) for node in nodes],edge_ordering)
 
 def sequence_on_graph_geometric(G: nx.Graph):
 
@@ -178,14 +176,6 @@ def construct_graph(node_ordering,edge_ordering) -> nx.Graph:
     G.add_edges_from(new_edge_ordering)
     return G
 
-def generate_sequence_from_graph(G: nx.Graph,node_ordering,edge_ordering) -> nx.Graph:
-    G_ = nx.Graph()
-    for i,node in enumerate(node_ordering):
-        G_.add_nodes_from([(node,G.nodes[node])])
-        for edge in edge_ordering[i]:
-            G_.add_edges_from( [ (edge[0],edge[1],G.edges[edge]) ] )
-    return G_
-
 def valid_molecule(G: nx.Graph) -> bool :
     '''
     Checks all valency constraints are satisfied
@@ -217,7 +207,7 @@ def construct_graph(node_ordering,edge_ordering):
     G.add_edges_from(new_edge_ordering)
     return G
 
-def generate_sequence_from_graph(G: nx.Graph,node_ordering,edge_ordering) -> nx.Graph:
+def generate_graph_from_sequence(G: nx.Graph,node_ordering,edge_ordering) -> nx.Graph:
     G_ = nx.Graph()
     for i,node in enumerate(node_ordering):
         G_.add_nodes_from([(node,G.nodes[node])])
