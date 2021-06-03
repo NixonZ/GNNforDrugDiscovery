@@ -197,16 +197,6 @@ def valid_molecule(G: nx.Graph) -> bool :
                 return False
     return valid
 
-def construct_graph(node_ordering,edge_ordering):
-    G = nx.Graph()
-    new_edge_ordering = []
-    for edge_list in edge_ordering:
-        for edge in edge_list:
-            new_edge_ordering.append(tuple(edge))
-    G.add_nodes_from(node_ordering)
-    G.add_edges_from(new_edge_ordering)
-    return G
-
 def generate_graph_from_sequence(G: nx.Graph,node_ordering,edge_ordering) -> nx.Graph:
     G_ = nx.Graph()
     for i,node in enumerate(node_ordering):
