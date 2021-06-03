@@ -4,6 +4,14 @@ import torch.optim as optim
 
 from torch_geometric.nn import MessagePassing
 
+def get_default_device():
+    """Pick GPU if available, else CPU"""
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    else:
+        return torch.device('cpu')
+device = get_default_device()
+
 class MPN(MessagePassing):
 
     def __init__(self,node_embedding_dim,edge_embedding_dim):
@@ -33,8 +41,8 @@ class Graph_Representation(nn.Module):
         # Message Passing Layers
         self.prop_steps = prop_steps
         # self.MPN = MPN(node_embedding_dim,edge_embedding_dim)
-        self.MPN_list = [ MPN(node_embedding_dim,edge_embedding_dim) for _ in range(prop_steps) ]
-        self.LSTM_list = [ nn.LSTMCell(node_embedding_dim,node_embedding_dim) for _ in range(prop_steps) ]
+        self.MPN_list = nn.ModuleList( [ MPN(node_embedding_dim,edge_embedding_dim) for _ in range(prop_steps) ] )
+        self.LSTM_list = nn.ModuleList( [ nn.LSTMCell(node_embedding_dim,node_embedding_dim) for _ in range(prop_steps) ] )
 
         # Learning Graph representation Layers
         self.gm = nn.Linear(node_embedding_dim,graph_dim)
@@ -48,7 +56,7 @@ class Graph_Representation(nn.Module):
         '''
         batch : Batch
         '''
-        c = torch.zeros(batch.x.size())
+        c = torch.zeros(batch.x.size()).to(device)
         edge_index = batch.edge_index
         edge_attr = batch.edge_attr
         for i in range(self.prop_steps):
@@ -68,7 +76,7 @@ class f_addnode(nn.Module):
     def __init__(self,graph_dim):
         super(f_addnode,self).__init__()
         
-        self.fan = nn.Linear(graph_dim,114)
+        self.fan = nn.Linear(graph_dim,115)
 
     def forward(self,h_G):
 
@@ -90,7 +98,7 @@ class f_nodes(nn.Module):
     def __init__(self,node_embedding_dim):
         super(f_nodes,self).__init__()
         
-        self.fs = nn.Linear(2*node_embedding_dim,21)
+        self.fs = nn.Linear(2*node_embedding_dim,20)
     
     def forward(self,x,h_v):
         h_v = torch.broadcast_to(h_v,(x.size()[0],h_v.size()[0]))
@@ -121,13 +129,12 @@ class new_edge(nn.Module):
         super(new_edge,self).__init__()
 
         self.R_init = Graph_Representation(node_embedding_dim,edge_embedding_dim,graph_dim,prop_steps)
-        self.f_init = nn.Linear(graph_dim+21,edge_embedding_dim)
+        self.f_init = nn.Linear(graph_dim+20,edge_embedding_dim-20)
 
     def forward(self,batch,x_uv):
         x = torch.cat([self.R_init(batch),x_uv],dim=0)
         x = self.f_init(x)
         return x
-
 
 '''
 G = (V,E)
@@ -158,12 +165,17 @@ class Model(nn.Module):
         node_ordering = sequence[0]
         edge_ordering = sequence[1]
         log_p = 0.0 # log p(G,π)
-        for edges,node in zip(edge_ordering,node_ordering):
+        canonical_node_ordering = dict()
+        canonical_node_ordering[node_ordering[0][0]] =0
+        i = 1
+
+        for edges,node in zip(edge_ordering[1:],node_ordering[1:]):
             node_type = self.f_addnode(h_G)
             log_p += torch.log( node_type[node[1]] )
-            
-            new_node_embedding = self.new_node(batch,node_type)
 
+            new_node_embedding = self.new_node(batch,node_type[:-1])
+            canonical_node_ordering[node[0]] = i
+            i+=1
             # add new node to graph
             temp = batch.x
             batch.x = torch.cat([batch.x,torch.reshape(new_node_embedding,(1,new_node_embedding.size()[0]))],dim=0)
@@ -173,25 +185,26 @@ class Model(nn.Module):
                     add_edge = self.f_addedge(h_G,new_node_embedding)
                     log_p += torch.log(add_edge[1])
                     continue
-                v = node[0]
-                if edge[0] == v:
-                    u = edge[1]
+                v = canonical_node_ordering[ node[0] ]
+                if edge[0] == node[0]:
+                    u = canonical_node_ordering[ edge[1] ]
                 else:
-                    u = edge[0]
+                    u = canonical_node_ordering[ edge[0] ]
                 add_edge = self.f_addedge(h_G,new_node_embedding)
                 scores = self.f_nodes(temp,new_node_embedding)
         
                 log_p += torch.log(add_edge[0]) + torch.log( scores[ u, edge[2] ] )
 
                 # add new edges to graph
-                batch.edge_index = torch.cat([batch.edge_index,torch.reshape(torch.tensor([u,v]),(2,1))],dim=1)
-                batch.edge_attr = torch.cat([batch.edge_attr,torch.zeros(1,47)],dim=0)
+                batch.edge_index = torch.cat([batch.edge_index,torch.reshape(torch.tensor([u,v]).to(device),(2,1))],dim=1)
+                batch.edge_attr = torch.cat([batch.edge_attr,torch.zeros(1,47).to(device)],dim=0)
                 new_edge_embedding = self.new_edge(batch,scores[u])
 
                 # batch.edge_attr = torch.cat([batch.edge_attr,new_edge_embedding],dim=0)
-                batch.edge_attr[-1] = new_edge_embedding
-            print(batch)
+                new_edge_type = torch.zeros((20)).to(device)
+                new_edge_type[edge[2]] = 1
+                batch.edge_attr[-1] = torch.cat([new_edge_type,new_edge_embedding],dim=0)
+            # print(batch)
         node_type = self.f_addnode(h_G)
         log_p += torch.log( node_type[-1] )
-        return log_p
-
+        return -1*log_p

@@ -30,7 +30,7 @@ def nx_to_torch_geom(G:nx.Graph) -> Data:
 
     # constructing node embeddings
     x = []
-    for _,v in G.nodes(data=True):
+    for k,v in G.nodes(data=True):
         node_embedding = [] # 128
 
         one_hot_element = [0]*114
@@ -56,14 +56,15 @@ def nx_to_torch_geom(G:nx.Graph) -> Data:
 
         x.append(node_embedding)
 
-    data['x'] = torch.tensor(x)
+    data['x'] = torch.tensor(x,dtype=torch.float)
 
     # constructing edge embedding
     edge_attr = []
-    for _,_,v in G.edges(data=True):
+    for u,k,v in G.edges(data=True):
         edge_embedding = []
         
         one_hot_bond_type = [0]*20
+        # print(bond_types_list)
         one_hot_bond_type[bond_types[str(v['bond_type'])]] = 1
         edge_embedding += one_hot_bond_type 
 
@@ -112,7 +113,7 @@ def nx_to_torch_geom(G:nx.Graph) -> Data:
 
         edge_attr.append(edge_embedding)
 
-    data['edge_attr'] = torch.tensor(edge_attr)
+    data['edge_attr'] = torch.tensor(edge_attr,dtype=torch.float)
 
     data = Data.from_dict(data)
 
