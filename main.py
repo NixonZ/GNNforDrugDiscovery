@@ -2,6 +2,7 @@ from graph import *
 from data import *
 from model import *
 import networkx as nx
+import torch.optim as optim
 
 # Molecules for testing
 mols = []
@@ -23,41 +24,45 @@ mols = [ read_molecule_mol(mol) for mol in mols ]
 
 # Create a torch-geometric dataloader
 dataset = []
+nx_dataset = []
 for mol in mols:
     G = mol_to_nx(mol)
-    data = nx_to_torch_geom(G)
+    nx_dataset.append(G)
+    data = nx_to_torch_geom(G).to(device)
     dataset.append(data)
-loader = DataLoader(dataset, batch_size= 64, shuffle= True)
+loader = DataLoader(dataset, batch_size= 1)
 
 # Create Model
 
 print(device)
 
-model = Model(128,47,50)
-model.to(device,non_blocking=True)
+model = Model(128,47,2500,10)
+model.to(device)
 
 model.train()
 # Parameters
-epochs = 3000
+epochs = 300
+losses = []
 torch.autograd.set_detect_anomaly(True)
-lr = 0.002
-optimizer = optim.SGD(model.parameters(recurse=True), lr=0.002, momentum=0.9)
-
-# Initialize every graph with a carbon atom
-G_ = read_molecule_nx("C")
-
-# The graph to learn
-G = mol_to_nx(mols[2])
-
+lr = 0.000002
+optimizer = optim.SGD(model.parameters(recurse=True), lr=lr, momentum=0.09)
+loss = torch.zeros((1),dtype=torch.float).to(device)
+verbose = False
 for i in range(epochs):
     optimizer.zero_grad()
-    print(i)
-    data = nx_to_torch_geom(G_)
-    data.edge_attr = torch.zeros((0,47))
-    data = data.to(device)
-    out = model.forward(data,sequence_on_graph(G))
-    out.backward(retain_graph=True)
-    out.detach_()
-    out = out.detach()
+    j = 0
+    for batch in loader.dataset:
+        loss += model.forward(batch,sequence_on_graph(nx_dataset[j]),verbose)
+        j+=1
+        if i%10==0:
+            print(i,loss.item())
+    if i%10==0:
+        verbose = True
+    else:
+        verbose = False
+    losses.append(loss.item())
+    loss.backward(retain_graph=True)
+    loss.detach_()
+    loss = loss.detach()
     optimizer.step()
     optimizer.zero_grad()
