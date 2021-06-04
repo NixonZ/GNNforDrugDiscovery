@@ -150,7 +150,7 @@ class Model(nn.Module):
         self.new_node = new_node(node_embedding_dim,edge_embedding_dim,graph_dim,prop_steps)
         # self.new_edge = new_edge(node_embedding_dim,edge_embedding_dim,graph_dim,prop_steps)
 
-    def forward(self,batch, sequence,verbose = False):
+    def forward(self,batch,sequence,verbose = False):
 
         # dimension of h_v = (|V|, *)
         '''
@@ -161,7 +161,7 @@ class Model(nn.Module):
         node_ordering = sequence[0]
         edge_ordering = sequence[1]
 
-        log_p = torch.zeros((1),dtype=torch.float)
+        log_p = torch.zeros((1),dtype=torch.float).to(device)
         # log p(G,π)
 
         canonical_node_ordering = dict()
@@ -169,7 +169,8 @@ class Model(nn.Module):
         i = 1
 
         seed_graph = Data()
-        seed_graph.x = torch.reshape(batch.x[node_ordering[0][0]],(1,128))
+        
+        seed_graph.x = torch.reshape(batch.x[ node_ordering[0][0] ],(1,128))
         seed_graph.edge_attr = torch.zeros((0,47),dtype=torch.float)
         seed_graph.edge_index = torch.zeros((2,0),dtype=torch.long)
         seed_graph = seed_graph.to(device)
@@ -182,8 +183,8 @@ class Model(nn.Module):
             node_type = self.f_addnode(h_G)
             if verbose:
                 print("Add Node with type")
-                print(node_type.data.numpy(),node[1])
-            log_p += torch.log( node_type[node[1]] )
+                print(node_type.cpu().data.numpy(),node[1])   
+            log_p += torch.log( node_type[node[1]-1] )
 
             new_node_embedding = self.new_node(seed_graph,node_type[:-1])
             canonical_node_ordering[node[0]] = i
@@ -192,29 +193,27 @@ class Model(nn.Module):
             temp = seed_graph.x
             # batch.x = torch.cat([seed_graph.x,torch.reshape(new_node_embedding,(1,new_node_embedding.size()[0]))],dim=0)
             seed_graph.x = torch.cat([seed_graph.x, torch.reshape( batch.x[node[0]],(1 ,batch.x.size()[1] ) ) ],dim=0)
-            if len(edges) == 0:
-                add_edge = self.f_addedge(h_G,new_node_embedding)
-                if verbose:
-                    print("Add Edge or not")
-                    print(add_edge.data.numpy(),"no")
-                log_p += torch.log(add_edge[1])
-                
+            # if len(edges) == 0:
+            #     add_edge = self.f_addedge(h_G,new_node_embedding)
+            #     if verbose:
+            #         print("Add Edge or not")
+            #         print(add_edge.data.numpy(),"no")
+            #     log_p += torch.log(add_edge[1])
             for edge in edges:
                 v = canonical_node_ordering[ node[0] ]
                 if edge[0] == node[0]:
-                    u = canonical_node_ordering[ edge[1] ]
+                    u = canonical_node_ordering[ edge[1]]
                 else:
                     u = canonical_node_ordering[ edge[0] ]
                 add_edge = self.f_addedge(h_G,new_node_embedding)
                 if verbose:
                     print("Add Edge or not")
-                    print(add_edge.data.numpy(),"yes")
+                    print(add_edge.cpu().data.numpy(),"yes")
                 scores = self.f_nodes(temp,new_node_embedding)
                 if verbose:
                     print("Which type of edge?")
-                    print(scores.data.numpy(),"Node:",u,"Type:",edge[2])
-                log_p += torch.log(add_edge[0]) + torch.log( scores[ u, edge[2] ] )
- 
+                    print(scores.cpu().data.numpy(),"Node:",u,"Type:",edge[2])
+                log_p += torch.log(add_edge[0]) + torch.log( scores[ u, edge[2] ] )   
                 # add new edges to graph
 
                 # seed_graph.edge_index = torch.cat([seed_graph.edge_index,torch.reshape(torch.tensor([u,v]).to(device),(2,1))],dim=1)
@@ -232,12 +231,16 @@ class Model(nn.Module):
                         break
                 seed_graph.edge_index = torch.cat([seed_graph.edge_index,torch.reshape(batch.edge_index[:,edge_idx],(2,1))],dim=1)
                 seed_graph.edge_attr = torch.cat([seed_graph.edge_attr,torch.reshape(batch.edge_attr[edge_idx],(1,47))],dim=0)
-
+            add_edge = self.f_addedge(h_G,new_node_embedding)
+            if verbose:
+                print("Add Edge or not")
+                print(add_edge.cpu().data.numpy(),"no")
+            log_p += torch.log(add_edge[1]) 
             # print(batch)
         h_G = self.R(seed_graph)
         node_type = self.f_addnode(h_G)
         if verbose:
             print("Don't add node and STOP")
-            print(node_type.data.numpy())
+            print(node_type.cpu().data.numpy())
         log_p += torch.log( node_type[-1] )
         return -1*log_p

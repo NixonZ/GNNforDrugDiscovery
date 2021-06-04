@@ -32,11 +32,26 @@ for mol in mols:
     dataset.append(data)
 loader = DataLoader(dataset, batch_size= 1)
 
-# Create Model
+# Sequence to tensor format
+def sequence_tensor(sequence):
+    node_ordering = torch.tensor(sequence[0]).to(device)
+
+    edge_ordering = sequence[1]
+    max_len = 0
+    for edges in edge_ordering:
+        if len(edges) > max_len:
+            max_len = len(edges)
+    
+    for i,_ in enumerate(edge_ordering):
+        while( len(edge_ordering[i])!= max_len ):
+            edge_ordering[i].append((-1,-1,-1))
+    edge_ordering = torch.tensor(edge_ordering).to(device)
+    return (node_ordering,edge_ordering)
 
 print(device)
 
-model = Model(128,47,2500,10)
+# Create Model
+model = Model(128,47,250,5)
 model.to(device)
 
 model.train()
@@ -46,17 +61,20 @@ losses = []
 torch.autograd.set_detect_anomaly(True)
 lr = 0.000002
 optimizer = optim.SGD(model.parameters(recurse=True), lr=lr, momentum=0.09)
-loss = torch.zeros((1),dtype=torch.float).to(device)
 verbose = False
 for i in range(epochs):
+    loss = torch.zeros((1),dtype=torch.float).to(device)
     optimizer.zero_grad()
     j = 0
     for batch in loader.dataset:
-        loss += model.forward(batch,sequence_on_graph(nx_dataset[j]),verbose)
+        sequence = sequence_on_graph(nx_dataset[j])
+        n = torch.tensor( list(range(2, len(sequence[0])+1) ) ).to(device)
+        n = torch.sum(torch.log(n))
+        loss += model.forward(batch,sequence,verbose) + n
         j+=1
         if i%10==0:
             print(i,loss.item())
-    if i%10==0:
+    if i%100==0:
         verbose = True
     else:
         verbose = False
