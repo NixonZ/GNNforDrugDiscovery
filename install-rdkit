@@ -1,0 +1,794 @@
+#! /usr/bin/env bash
+
+function main
+{
+    default_release=Release_2018_09_1
+
+    parse_opts "${@}"
+
+
+    #
+    # Check the parameters
+    #
+
+    if [ -z "${release}" ]
+    then
+        debug "Defaulting release to ${default_release}"
+        release="${default_release}"
+    fi
+
+    if [ -z "${python_version}" ]
+    then
+        case "$(lsb_release -rs)" in
+            20.04)
+                default_python_version=3.8
+                ;;
+            18.04)
+                default_python_version=3.7
+                ;;
+            16.04)
+                default_python_version=2.7
+                ;;
+            *)
+                die "This installer does not currently support Ubuntu $(lsb_release -rs). Specify the correct python-version and possibly boost-version to use this Ubuntu version."
+                ;;
+        esac
+
+        debug "Defaulting python_version to ${default_python_version}"
+        python_version="${default_python_version}"
+    fi
+
+    case "${python_version}" in
+        2.7|3.6|3.7|3.8)
+            ;;
+        *)
+            die "ERROR: Invalid or unsupported Python version: ${python_version}"
+            ;;
+    esac
+
+    debug "Initial install dir path: ${install_dir}"
+
+    if [ -z "${venv}" ]
+    then
+        # Use the currently active Python virtual environment, if any.
+        if [ ! -z "${VIRTUAL_ENV}" ]
+        then
+            # Make sure the virtualenv actually exists.
+            if [ ! -d "${VIRTUAL_ENV}" ]
+            then
+                die 'ERROR: The currently active Python virtual environment has been deleted.'
+            fi
+
+            venv="${VIRTUAL_ENV}"
+        fi
+    else
+        if [ ! -d "${venv}" ]
+        then
+            die 'virtual-env is not a directory.'
+        fi
+
+        # Ensure venv is a fully qualified path.
+        venv="$(cd "${venv}" && pwd)"
+
+        if [ ! -f "${venv}"/lib/python${python_version}/site-packages/pip/__init__.py ]
+        then
+            die "${venv} is not a valid Python virtual environment for python${python_version}."
+        fi
+        debug "Absolute venv path: ${venv}"
+
+        # Make sure it is active so we can check and install numpy below.
+        source "${venv}"/bin/activate
+    fi
+
+    if [ ! -z "${venv}" ]
+    then
+        # Make sure the venv has numpy installed.
+        if ! python -c 'import numpy' 2> /dev/null
+        then
+            pip install numpy
+        fi
+
+        # Point cmake to the venv’s numpy include dir.
+        numpy_cmake_option="-D PYTHON_NUMPY_INCLUDE_PATH='${venv}/lib/python${python_version}/site-packages/numpy/core/include'"
+    fi
+
+    build_psql='OFF'
+    if [ ! -z "${postgresql_version}" ]
+    then
+        build_psql='ON'
+
+        if [ -z "${postgresql_root}" ]
+        then
+            postgresql_root="/usr/lib/postgresql/${postgresql_version}"
+        fi
+
+        if [ ! -d "${postgresql_root}" ]
+        then
+            alarm "ERROR: Invalid PostgreSQL root. Directory ${postgresql_root} does not exist."
+            alarm "Either --postgresql-version or --postgresql-root option is incorrect."
+            die "Make sure you have the correct PostgreSQL version installed in the correct location."
+        fi
+    fi
+
+    if [ -z "${boost_version}" ]
+    then
+        if [[ "$(lsb_release -rs)" == '20.04' ]]
+        then
+            boost_version=1.67
+        fi
+    fi
+
+    if [ ! -d "${install_dir}" ]
+    then
+        mkdir -p "${install_dir}"
+        check_err $? 'Install directory could not be created.'
+    fi
+
+    if [ ! -w "${install_dir}" ]
+    then
+        die 'Install directory is not writeable.'
+    fi
+
+    # Ensure Install dir is a fully qualified path.
+    install_dir="$(cd "${install_dir}" && pwd)"
+    debug "Absolute install dir path: ${install_dir}"
+
+
+    echo
+    echo 'Installing required system packages. Enter your password if you are prompted.'
+    echo
+
+    #
+    # We used to install only the following libboost packages: libboost-dev
+    # libboost-python-dev libboost-regex-dev libboost-system-dev
+    # libboost-thread-dev libboost-serialization-dev libboost-iostreams-dev.
+    # Those seem to be all it needs. It may not need libboost-iostreams-dev.
+    #
+    # The official RDKit docker image only installs libboost-all-dev (which
+    # installs the above list and more), so we switched to that
+    # (https://github.com/rdkit/rdkit_containers/blob/master/docker/ubuntu_bionic/Dockerfile).
+    #
+    sudo apt-get install -y \
+        wget build-essential cmake "libboost${boost_version}-all-dev"
+    check_err $? 'Could not install required system packages.'
+
+    if [[ $build_psql == ON ]]
+    then
+        sudo apt-get install -y postgresql-server-dev-${postgresql_version}
+    fi
+    check_err $? 'Could not install required system packages.'
+
+    case "${python_version}" in
+        3.8)
+            debug "Installing Python ${python_version} packages..."
+            sudo apt-get install -y \
+                python3.8 python3.8-dev python3-numpy
+            check_err $? 'Could not install required system packages.'
+            ;;
+        3.7)
+            debug "Installing Python ${python_version} packages..."
+            sudo apt-get install -y \
+                python3.7 python3.7-dev python3-numpy
+            check_err $? 'Could not install required system packages.'
+            ;;
+        3.6)
+            debug "Installing Python ${python_version} packages..."
+            sudo apt-get install -y \
+                python3.6 python3.6-dev python3-numpy
+            check_err $? 'Could not install required system packages.'
+            ;;
+        2.7)
+            debug "Installing Python ${python_version} packages..."
+            sudo apt-get install -y \
+                python2.7 python2.7-dev python-numpy
+            check_err $? 'Could not install required system packages.'
+            ;;
+    esac
+
+
+    echo
+    echo 'Fetching the archive...'
+    echo
+
+    tmpdir="$(mktemp -d)"
+    cd "${tmpdir}"
+
+    archive_url="https://github.com/rdkit/rdkit/archive/${release}.tar.gz"
+
+    wget "https://github.com/rdkit/rdkit/archive/${release}.tar.gz"
+    check_err $? 'RDKit release could not be downloaded.'
+
+
+    echo
+    echo 'Extracting the archive to the install_dir directory...'
+    echo
+
+    tar -xzf "${release}.tar.gz" -C "${tmpdir}"
+    # Clean out install directory
+    rm -rf "${install_dir}"/{*,.[!.]*}
+    mv ${tmpdir}/rdkit-${release}/{*,.[!.]*} "${install_dir}"
+
+
+    echo
+    echo 'Compiling and installing...'
+    echo
+
+    export RDBASE="${install_dir}"
+    export LD_LIBRARY_PATH=$RDBASE/lib:$LD_LIBRARY_PATH
+    export PYTHONPATH=$RDBASE:$PYTHONPATH
+
+    mkdir -p "${install_dir}/build"
+    cd "${install_dir}/build"
+    debug "Current directory for build: ${PWD}"
+
+    case "${python_version}" in
+        3.8)
+            debug "Running cmake for Python ${python_version}..."
+            debug "numpy_cmake_option: $numpy_cmake_option"
+            # Based on the advanced install instructions in the RDKit online
+            # docs with paths changed to match Ubuntu Linux file locations:
+            # https://www.rdkit.org/docs/Install.html#advanced
+            cmake -D PYTHON_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.8.so \
+                -D PYTHON_INCLUDE_DIR=/usr/include/python3.8 \
+                -D PYTHON_EXECUTABLE=/usr/bin/python3.8 \
+                $numpy_cmake_option \
+                -D RDK_BUILD_INCHI_SUPPORT=ON \
+                -D RDK_BUILD_PGSQL="${build_psql}" \
+                -D PostgreSQL_ROOT="${postgresql_root}" ..
+            check_err $? 'ERROR: cmake failed. See output above for details.'
+            ;;
+        3.7)
+            debug "Running cmake for Python ${python_version}..."
+            debug "numpy_cmake_option: $numpy_cmake_option"
+            # Based on the advanced install instructions in the RDKit online
+            # docs with paths changed to match Ubuntu Linux file locations:
+            # https://www.rdkit.org/docs/Install.html#advanced
+            cmake -D PYTHON_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.7m.so \
+                -D PYTHON_INCLUDE_DIR=/usr/include/python3.7m \
+                -D PYTHON_EXECUTABLE=/usr/bin/python3.7 \
+                $numpy_cmake_option \
+                -D RDK_BUILD_INCHI_SUPPORT=ON \
+                -D RDK_BUILD_PGSQL="${build_psql}" \
+                -D PostgreSQL_ROOT="${postgresql_root}" ..
+            check_err $? 'ERROR: cmake failed. See output above for details.'
+            ;;
+        3.6)
+            debug "Running cmake for Python ${python_version}..."
+            debug "numpy_cmake_option: $numpy_cmake_option"
+            # Based on the advanced install instructions in the RDKit online
+            # docs with paths changed to match Ubuntu Linux file locations:
+            # https://www.rdkit.org/docs/Install.html#advanced
+            cmake -D PYTHON_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.6m.so \
+                -D PYTHON_INCLUDE_DIR=/usr/include/python3.6m \
+                -D PYTHON_EXECUTABLE=/usr/bin/python3.6 \
+                $numpy_cmake_option \
+                -D RDK_BUILD_INCHI_SUPPORT=ON \
+                -D RDK_BUILD_PGSQL="${build_psql}" \
+                -D PostgreSQL_ROOT="${postgresql_root}" ..
+            check_err $? 'ERROR: cmake failed. See output above for details.'
+            ;;
+        2.7)
+            debug "Running cmake for Python ${python_version}..."
+            cmake -D RDK_BUILD_INCHI_SUPPORT=ON \
+                  -D RDK_BUILD_PGSQL="${build_psql}" ..
+            check_err $? 'ERROR: cmake failed. See output above for details.'
+            ;;
+    esac
+
+    cpu_cores="$(cat /proc/cpuinfo | awk '/^processor/{print $3}' | wc -l)"
+    make -j $cpu_cores
+    check_err $? 'ERROR: make failed. See output above for details.'
+    make install
+    check_err $? 'ERROR: make install failed. See output above for details.'
+
+    if [[ $build_psql == ON ]]
+    then
+        # Make sure the built RDKit cartidge files are readable by all so that
+        # they will be readable when the install script copies them into their
+        # system locations.
+        #
+        # Extract the filenames from the installer.
+        for file in $(grep -E '^cp ' "${install_dir}"/build/Code/PgSQL/rdkit/pgsql_install.sh | cut -d' ' -f 2 | tr -d '"')
+        do
+            chmod u+r,g+r,o=r "${file}"
+        done
+
+        # Modify the installer to make sure these permissions are preserved
+        # when the files are copied.
+        sed -i 's/^cp /cp --preserve=mode /' "${install_dir}"/build/Code/PgSQL/rdkit/pgsql_install.sh
+
+        # Make sure the PostgreSQL cartridge installer is executable.
+        chmod ug+x "${install_dir}"/build/Code/PgSQL/rdkit/pgsql_install.sh
+    fi
+
+    echo
+    echo
+    echo "RDKit installation is complete. To use it, enter the following commands. You should put these in your ~/.profile file, or in a script that you source when you want to use this RDKit installation."
+    echo
+    echo "RDBASE=\"${install_dir}\""
+    echo "export RDBASE"
+    echo 'LD_LIBRARY_PATH=$RDBASE/lib:$LD_LIBRARY_PATH'
+    echo 'export LD_LIBRARY_PATH'
+    echo 'PYTHONPATH=$RDBASE:$PYTHONPATH'
+    echo 'export PYTHONPATH'
+
+    if [[ $build_psql == ON ]]
+    then
+        echo
+        echo
+        echo 'To install the RDKit PostgreSQL cartridge enter the following commands.'
+        echo
+        echo 'sudo service postgresql stop'
+        echo "sudo ${install_dir}/build/Code/PgSQL/rdkit/pgsql_install.sh"
+        echo 'sudo service postgresql start'
+    fi
+}
+
+
+function print_help
+{
+    cat <<- EOF
+		NAME
+		    install-rdkit
+		
+		SYNOPSIS
+		    install-rdkit INSTALL_DIR
+		
+		DESCRIPTION
+		    Downloads and compiles a specified RDKit release.
+		
+		USAGE
+		    INSTALL_DIR is the directory RDKit will be installed in. can be any
+		    local directory path. If the directory does not exist,
+		    install-rdkit will attempt to create it. WARNING: Anything in this
+		    directory will be deleted.
+		
+		    To use the version of RDKit this installs you must set some
+		    environment variables. You can do those manually. You can put them
+		    in your ~/.profile file to have them set automatically each time
+		    you open a new shell. You can also put them in a file like
+		    rdkit-env and run source rdkit-env each time you want to use it.
+		
+		    If your INSTALL_DIR is /path/to/install/dir, set the following
+		    environment variables.
+		
+		    Note that RDKit will function if you do not export RDBASE, but it
+		    will be operating in a fallback mode and may have issues.
+		
+		    RDBASE=/path/to/install/dir
+		    export RDBASE
+		    LD_LIBRARY_PATH=\$RDBASE/lib:\$LD_LIBRARY_PATH
+		    export LD_LIBRARY_PATH
+		    PYTHONPATH=\$RDBASE:\$PYTHONPATH
+		    export PYTHONPATH
+		
+		OPTIONS
+		    -r, --release
+		        The name of the release tag in the RDKit official GitHub
+		        repository: https://github.com/rdkit/rdkit/tags. Defaults to
+		        Release_2018_09_1, Cyclica’s standard RDKit release.
+		
+		    -p, --python-version
+		        Version of Python to build for. Defaults to current Python 3
+		        version for supported Ubuntu releases (2.7 for Ubuntu 16.04).
+		        Exits with an error if not specified and Ubuntu release is
+		        unsupported. Currently supports 2.7, 3.6, 3.7, and 3.8.
+		
+		    -e, --virtual-env
+		        Path to the Python virtual environment you want to run this
+		        installation of RDKit in. If you have a virtual environment
+		        activated it will default to that.
+		
+		        If the virtual environment does not already have numpy the
+		        latest version will be installed. If whatever you are using
+		        RDKit with uses numpy you should install its required version
+		        in the virtual environment before running this installer.
+		
+		    --postgresql-version
+		        Set this to the major version of PostgreSQL you have installed
+		        and install-rdkit will build RDKit with the optional Postgres
+		        cartridge. As of early 2020 valid versions are 9.4, 9.5, 9.6,
+		        10, 11, 12.
+		
+		        Once RDKit is built run the following to install the cartridge.
+		
+		        sudo service postgresql stop
+		        sudo ./build/Code/PgSQL/rdkit/pgsql_install.sh
+		        sudo service postgresql start
+		
+		    --postgresql-root
+		        Set this to specify the root directory your system’s PostgreSQL
+		        installation can be found in. This is only used if
+		        --postgresql-version is specified. Defaults to
+		        /usr/lib/postgresql/POSTGRESQL_VERSION.
+		
+		    -b, --boost-version
+		        The version of libboost system packages you wish to install. By
+		        default the most likely compatible boost version in your
+		        current version of Ubuntu is used. If you see boost errors
+		        during the build it may be because the RDKit version you chose
+		        does not work with the boost version. See your package manager
+		        to find out which boost versions are available.
+		    
+		        Set this to the version number you see in the libboost-all-dev
+		        package name, ie. if you have libboost1.62-all-dev available,
+		        set this to 1.62 to use those libboost packages.
+		
+		    -c WHEN, --color=WHEN
+		        Colorize the output. WHEN can be 'always', 'auto' (default if
+		        omitted), or 'never'. With 'auto' it emits color codes only
+		        when standard output is connected to a terminal.
+		
+		    -d, --debug
+		        Print debugging output while running.
+		
+		    -h, --help
+		        print this help text and exit.
+		
+		EXAMPLES
+		    # Download and compile Release_2018_09_1 in the current directory
+		    install-rdkit ./
+		
+		    # Download and compile Release_2018_09_1 in /path/to/install/dir
+		    install-rdkit /path/to/install/dir
+		
+		    # Download and compile Release_2018_09_1 for python 2.7 in /path/to/install/dir
+		    install-rdkit --python-version=2.7 --release=Release_2018_09_1 /path/to/install/dir
+		
+		    # Download and compile Release_2018_09_1 in /path/to/install/dir
+		    # with PostgreSQL cartridge built for PostgreSQL 10 on Ubuntu.
+		    install-rdkit --postgresql-version=10 /path/to/install/dir
+		
+		    # Download and compile Release_2018_09_1 in /path/to/install/dir
+		    # with PostgreSQL cartridge built for PostgreSQL 10 with custom
+		    # PostgreSQL dir.
+		    install-rdkit --postgresql-version=10 --postgresql-root=/postgresql-10 /path/to/install/dir
+		
+		    # Download and compile Release_2018_09_1 in /path/to/install/dir
+		    # libboost 1.65.
+		    install-rdkit --boost-version=1.65 /path/to/install/dir
+	EOF
+}
+
+
+function parse_opts
+{
+    #
+    # Parse the command-line arguments.
+    #
+    # Code borrowed and modified from here:
+    # https://stackoverflow.com/questions/192249/how-do-i-parse-command-line-arguments-in-bash#answer-29754866
+    #
+
+    ! getopt --test > /dev/null 
+    if [[ ${PIPESTATUS[0]} -ne 4 ]]
+    then
+        die 'I’m sorry, cannot parse command line parameters in this environment. `getopt --test` failed.'
+        exit 1
+    fi
+
+    #
+    # Declare option arguments.
+    #
+    # For options that take a parameter, put a : after the letter or name, ex:
+    #
+    #   OPTIONS=s:dt
+    #   LONGOPTS=source:,debug,test
+    #
+    OPTIONS=r:p:e:b:c:dh
+    LONGOPTS=release:,python-version:,virtual-env:,postgresql-version:,postgresql-root:,boost-version:,color:,debug,help
+
+    # Use ! and PIPESTATUS to get exit code with errexit set.
+    # Temporarily store output to be able to check for errors.
+    # Activate quoting/enhanced mode (e.g. by writing out “--options”).
+    # Pass arguments only via   -- "$@"   to separate them correctly.
+    ! PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "$0" -- "$@")
+    if [[ ${PIPESTATUS[0]} -ne 0 ]]
+    then
+        # e.g. return value is 1
+        #  then getopt has complained about wrong arguments to stdout
+        exit 2
+    fi
+    # read getopt’s output this way to handle the quoting right:
+    eval set -- "$PARSED"
+
+    # Set defaults here or earlier, if any.
+
+    local input_color_option
+
+    #
+    # Now enjoy the options in order and nicely split until we see --
+    #
+    # For options that take a parameter, write a case like this:
+    #
+    #   -s|--source)
+    #       source="$2"
+    #       shift 2
+    #       ;;
+    #
+    while true
+    do
+        case "$1" in
+            -r|--release)
+                release="${2}"
+                shift 2
+                ;;
+            -p|--python-version)
+                python_version="${2}"
+                shift 2
+                ;;
+            -e|--virtual-env)
+                venv="${2}"
+                shift 2
+                ;;
+            --postgresql-version)
+                postgresql_version="${2}"
+                shift 2
+                ;;
+            --postgresql-root)
+                postgresql_root="${2}"
+                shift 2
+                ;;
+            -b|--boost-version)
+                boost_version="${2}"
+                shift 2
+                ;;
+            -c|--color)
+                input_color_option="$2"
+                shift 2
+                ;;
+            -d|--debug)
+                DEBUG=true
+                shift
+                ;;
+            -h|--help)
+                print_help
+                exit
+                ;;
+            --)
+                shift
+                break
+                ;;
+            *)
+                echo "Programming error"
+                exit 3
+                ;;
+        esac
+    done
+
+
+    case "${input_color_option}" in
+        always|yes|force)
+            color_option=always
+            ;;
+        never|no|none)
+            color_option=never
+            ;;
+        auto|tty|if-tty)
+            # Defaults to this if unset.
+            color_option=auto
+            ;;
+        '')
+            # Let the color function choose the default.
+            ;;
+        *)
+            alarm "Invalid value ${input_color_option} for --color."
+            echo
+            print_help
+            # "command line usage error" in /usr/include/sysexits.h.
+            exit 64
+            ;;
+    esac
+
+
+    if [ -z "${1}" ]
+    then
+        alarm 'No INSTALL_DIR specified'.
+        echo
+        echo 'Usage:'
+        echo
+        print_help
+        exit 1
+    fi
+    install_dir="${1}"
+
+    if [ ! -z "${2}" ]
+    then
+        alarm "ERROR: Unknown option: ${2}"
+        echo
+        echo 'Usage:'
+        echo
+        print_help
+        exit 1
+    fi
+}
+
+
+#
+# bool — medium strictness boolean value checking.
+#
+bool() ([ -z "${2+x}" ] && [[ $1 == true ]])
+
+
+#
+# Returns success (0) if colour should be output and failure (1) otherwise.
+#
+# Usage:
+#
+#   if color; then …; fi
+#
+# Defaults to 'auto' if global $color_option is unset or an empty string.
+#
+# Exits with an error message if global $color_option is an invalid value.
+#
+function color
+{
+    case "${color_option}" in
+        always)
+            return 0
+            ;;
+        never)
+            return 1
+            ;;
+        auto|'')
+            # Output color when stdout is a terminal.
+            if [ -t 1 ]
+            then
+                # stdout is a terminal. Use color output.
+                return 0
+            else
+                # stdout is not a terminal. Do not use color output.
+                return 1
+            fi
+            ;;
+        *)
+            set_color_option="${color_option}"
+            # Set a valid color_option so we can output our error message.
+            color_option=auto
+            die "Internal software error: Invalid color_option: ${set_color_option}." 70
+            ;;
+    esac
+}
+
+
+#
+# warn - print warning message
+#
+# $1 - message
+#
+function warn
+{
+    if color
+    then
+        # print to regular output in regular orange
+        printf "\033[0;33m"
+    fi
+
+    # Print the message with regular `echo` to prevent anything in the string
+    # from being interpreted as formatting characters.
+    echo "${1}"
+
+    if color
+    then
+        printf "\033[m"
+    fi
+}
+
+
+#
+# alarm - print alarm / error message
+#
+# $1 - message
+#
+function alarm
+{
+    if color
+    then
+        # print to error output in bold red
+        printf "\033[1;31m" >&2
+    fi
+
+    # Print the message with regular `echo` to prevent anything in the string
+    # from being interpreted as formatting characters.
+    echo "${1}" >&2
+
+    if color
+    then
+        printf "\033[m" >&2
+    fi
+}
+
+
+#
+# die - print an alarm message and exit with an error code
+#
+# $1 - error message to print
+# $2 - (optional) error code to exit with, defaults to 1
+#
+function die
+{
+    alarm "${1}"
+
+    # Use the return code if it is numeric and not an empty string.
+    if echo "${2}" | grep -qE '^[0-9]+$'
+    then
+        exit ${2}
+    else
+        exit 1
+    fi
+}
+
+
+#
+# check_err - check an error code and exit if it’s not success (0).
+#
+# $1 - return code to check
+# $2 - (optional) text to display on failure. Defaults to basic message.
+# $3 - (optional) error code to exit with, defaults to 1
+#
+function check_err
+{
+    local a=$1
+
+    # Empty strings will evaluate as equal to 0, so check for them first.
+    if [ -z "${a}" ]
+    then
+        # An empty string means this function was called incorrectly, but it
+        # was not given a failure return code, so don’t exit.
+        warn "WARNING: check_err called with no return code."
+        return
+
+    elif ! echo "${a}" | grep -qE '^[0-9]+$'
+    then
+        warn "WARNING: check_err called with non‐numeric value."
+        return
+
+    elif ! (( a == 0 ))
+    then
+        failure=true
+    fi
+
+    if [[ $failure == true ]]
+    then
+        if [ -z "${2}" ]
+        then
+            message="Command returned fatal error."
+        else
+            message="${2}"
+        fi
+
+        # Use the return code if it is numeric and not an empty string.
+        if echo "${3}" | grep -qE '^[0-9]+$'
+        then
+            return_code="${3}"
+        else
+            return_code=1
+        fi
+
+        die "${message}" "${return_code}"
+    fi
+}
+
+
+#
+# debug - print debug message to stderr if DEBUG is set to 'true'
+#
+# $1 - message
+#
+function debug
+{
+    if bool $DEBUG
+    then
+        echo "${1}" >&2
+    fi
+}
+
+
+function clean_up
+{
+    rm -rf ${tmpdir}
+}
+trap clean_up EXIT
+
+
+main "${@}"

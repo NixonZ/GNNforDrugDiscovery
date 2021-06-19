@@ -37,3 +37,36 @@ The description of various methods and classes are as follows.
 4. __f_add_edge(nn.Module)__: Neural network that decides probability of adding edges to the subgraph connecting to the recently added node.
 5. __f_nodes(nn.Module)__: Neural network that decides probability of adding edge to the subgraph connecting to the recently added node over the nodes of the rest of the subgraph.
 6. __Model(nn.Module)__: The final GNN model. 
+
+## Installation
+
+### creating venv
+```
+sudo apt-get install python3.7-venv
+python3.7 -m venv env
+```
+### torch
+```
+soyrce ./env/bin/activate
+pip3 install torch
+pip3 install -r requirements.txt
+```
+### RDKIT
+Download
+```
+wget https://github.com/rdkit/rdkit/archive/Release_XXXX_XX_X.tar.gz
+```
+Unzip the tar file.
+Install(source - https://github.com/cyclica/rdkit-installer)
+```
+bash ./install-rdkit ./RDkit -e ./env/
+```
+Set PATH for rdkit.
+```
+RDBASE="<Path to RDkit folder>"
+export RDBASE
+LD_LIBRARY_PATH=$RDBASE/lib:$LD_LIBRARY_PATH
+export LD_LIBRARY_PATH
+PYTHONPATH=$RDBASE:$PYTHONPATH
+export PYTHONPATH
+```

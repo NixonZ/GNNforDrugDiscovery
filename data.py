@@ -16,6 +16,7 @@ bond_stereo_list = [ str(bond_stereo[1]) for bond_stereo in rdchem.BondStereo.va
 bond_steroes = dict( (j,i) for i,j in enumerate(bond_stereo_list))
 
 def torch_geom_to_mol(data: Data) -> rdchem.Mol:
+    # To-do
     return None
 
 def nx_to_torch_geom(G:nx.Graph) -> Data:

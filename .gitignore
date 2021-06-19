@@ -111,6 +111,8 @@ env.bak/
 venv.bak/
 pytorch
 RDkit
+env_old
+.vscode
 
 # Spyder project settings
 .spyderproject
@@ -129,3 +131,7 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Model/Loss
+*.npy
+*.pt

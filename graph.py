@@ -110,11 +110,10 @@ def sequence_on_graph(G: nx.Graph):
     return ([ (node,G.nodes(data=True)[node]['atomic_num']) for node in nodes],edge_ordering)
 
 def sequence_on_graph_geometric(G: nx.Graph):
-
     '''
     Generates a random ordering of nodes and edges in Geometric distribution (Restricted Sample space)
     input: A graph G of type nx.Graph()
-    Output: List of nodes in order of node ordering and a list of list of tuples of edge orders.
+    Output: List of nodes in order of node ordering, a list of list of tuples of edge orders and the log-probability of this sequence.
     '''
     nodes = list(G.nodes())    
     # for (n,nbrdict) in G.adjacency():
@@ -126,6 +125,8 @@ def sequence_on_graph_geometric(G: nx.Graph):
 
     nodes_selected = []
     nodes_left = nodes
+
+    log_prob = 0.0
 
     probabilities = []
     p = 1/2
@@ -139,7 +140,9 @@ def sequence_on_graph_geometric(G: nx.Graph):
         probabilities.append(1)
 
     while(len(nodes_left)!=0):
-        selected_node = np.random.choice(nodes_left,p=probabilities)
+        i = np.random.choice(np.arange(len(nodes_left)),p=probabilities)
+        selected_node = nodes_left[i]
+        log_prob += np.log(probabilities[i])
         nodes_selected.append(selected_node)
         nodes_left.remove(selected_node)
         probabilities.pop()
@@ -152,11 +155,11 @@ def sequence_on_graph_geometric(G: nx.Graph):
         edge_list = G[node]
         for adjacent_node in edge_list:
             if adjacent_node in ordering:
-                sub_ordering.append((node,adjacent_node))
+                sub_ordering.append((node,adjacent_node,bond_types[str(G[node][adjacent_node]['bond_type'])]))
         shuffle(sub_ordering)
         edge_ordering.append(sub_ordering)
-    return (nodes_selected,edge_ordering)
-# def Get_log_Probability(base_node_ordering, node_ordering):
+
+    return ( [(node,G.nodes(data=True)[node]['atomic_num']) for node in nodes_selected] , edge_ordering, log_prob )
     
 def construct_graph(node_ordering,edge_ordering) -> nx.Graph:
     '''

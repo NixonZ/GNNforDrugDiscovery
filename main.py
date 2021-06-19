@@ -56,31 +56,43 @@ model.to(device)
 
 model.train()
 # Parameters
-epochs = 300
+epochs = 30
 losses = []
 torch.autograd.set_detect_anomaly(True)
-lr = 0.000002
-optimizer = optim.SGD(model.parameters(recurse=True), lr=lr, momentum=0.09)
+lr = 0.0001
+# optimizer = optim.SGD(model.parameters(recurse=True), lr=lr, momentum=0.9)
+optimizer = optim.Adam(model.parameters(),lr=lr)
 verbose = False
+
 for i in range(epochs):
-    loss = torch.zeros((1),dtype=torch.float).to(device)
     optimizer.zero_grad()
     j = 0
+    mini_batch = []
     for batch in loader.dataset:
-        sequence = sequence_on_graph(nx_dataset[j])
-        n = torch.tensor( list(range(2, len(sequence[0])+1) ) ).to(device)
-        n = torch.sum(torch.log(n))
-        loss += model.forward(batch,sequence,verbose) + n
-        j+=1
-        if i%10==0:
-            print(i,loss.item())
-    if i%100==0:
-        verbose = True
-    else:
-        verbose = False
-    losses.append(loss.item())
-    loss.backward(retain_graph=True)
-    loss.detach_()
-    loss = loss.detach()
-    optimizer.step()
-    optimizer.zero_grad()
+        mini_batch.append((batch,j))
+        if len(mini_batch) == 50 or j == len(loader.dataset)-1:
+            loss = torch.zeros((1),dtype=torch.float).to(device)
+            for data,k in mini_batch:
+                # sequence = sequence_on_graph(nx_dataset[k])
+                # loss += model.forward(data,sequence,verbose)
+                temp = sequence_on_graph_geometric(nx_dataset[k])
+                sequence = (temp[0],temp[1])
+                log_prob = temp[2]
+                loss += model.forward(data,sequence,verbose) + log_prob
+            if i%10==0:
+                print(i,loss.item())
+            losses.append(loss.item())
+            loss.backward()
+            loss.detach_()
+            loss = loss.detach()
+            optimizer.step()
+            optimizer.zero_grad()
+            mini_batch = []
+        j+=1 
+    if i%10 ==0:
+        torch.save(model, "Modelv1.pt")
+        np.save("losses.npy",losses)
+    # if i%100==0 and i!=0:
+    #     verbose = True
+    # else:
+    #     verbose = False

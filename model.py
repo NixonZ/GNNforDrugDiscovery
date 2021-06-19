@@ -4,12 +4,18 @@ import torch.nn as nn
 from torch_geometric.nn import MessagePassing
 from torch_geometric.data import Data
 
+from data import *
+from mendeleev import element as ele
+import matplotlib.pyplot as plt
+
+
 def get_default_device():
     """Pick GPU if available, else CPU"""
     if torch.cuda.is_available():
         return torch.device('cuda')
     else:
         return torch.device('cpu')
+
 device = get_default_device()
 
 class MPN(MessagePassing):
@@ -118,20 +124,6 @@ class new_node(nn.Module):
         # x[:115] = torch.zeros(x.size())
         # x[:115][idx] = 1
         return x
-
-class new_edge(nn.Module):
-
-    def __init__(self,node_embedding_dim,edge_embedding_dim,graph_dim,prop_steps):
-        super(new_edge,self).__init__()
-
-        self.R_init = Graph_Representation(node_embedding_dim,edge_embedding_dim,graph_dim,prop_steps)
-        self.f_init = nn.Linear(graph_dim+20,edge_embedding_dim-20)
-
-    def forward(self,batch,x_uv):
-        x = torch.cat([self.R_init(batch),x_uv],dim=0)
-        x = self.f_init(x)
-        return x
-
 
 '''
 G = (V,E)
@@ -244,3 +236,178 @@ class Model(nn.Module):
             print(node_type.cpu().data.numpy())
         log_p += torch.log( node_type[-1] )
         return -1*log_p
+
+def draw_graph(G):
+    fig = plt.figure()
+    elements = nx.get_node_attributes(G, name = "element")
+    nx.draw(G, with_labels=True, labels = elements, pos=nx.spring_layout(G))
+    rect = plt.Rectangle((0, 0), 1, 1, fill=False, color="k", lw=2, zorder=1000, transform=fig.transFigure, figure=fig)
+    fig.patches.extend([rect])
+    plt.tight_layout()
+    plt.show()
+
+def sample(model):
+    G = nx.Graph()
+    seed_graph = Data()
+    
+    seed_graph = nx_to_torch_geom(read_molecule_nx('C'))
+
+    seed_graph.edge_attr = torch.zeros((0,47),dtype=torch.float)
+    seed_graph.edge_index = torch.zeros((2,0),dtype=torch.long)
+    G.add_node (0,atomic_num = 6, element = ele(6).symbol)
+    print("--------Initial Graph------")
+    print(seed_graph)
+    draw_graph(G)
+    
+
+    seed_graph.to(device)
+
+    h_G = model.R(seed_graph)
+
+    node_type = model.f_addnode(h_G)
+
+    num_nodes = 1
+
+    node_type_choice = np.random.choice(a = list(range(115)),p = node_type.cpu().data.numpy())
+
+    while num_nodes < 50 and node_type_choice != 114:
+
+        G.add_node(num_nodes,atomic_num = node_type_choice+1,zaib = ele(int(node_type_choice)+1).symbol)
+
+        new_node_embedding = model.new_node(seed_graph,node_type[:-1])
+
+        # add new node to graph
+        temp = seed_graph.x
+        seed_graph.x = torch.cat([seed_graph.x,torch.reshape(new_node_embedding,(1,new_node_embedding.size()[0]))],dim=0)
+        num_nodes += 1
+
+        print("--------Adding Node------")
+        print(seed_graph)
+        draw_graph(G)
+
+        # decide whether to add edge or not.
+        add_edge = model.f_addedge(h_G,new_node_embedding)
+        add_edge_choice = np.random.choice(a = list(range(2)),p = add_edge.cpu().data.numpy())
+        edges_added = set()
+        while add_edge_choice != 1:
+            scores = model.f_nodes(temp,new_node_embedding)
+
+            # print(np.sum(scores.cpu().data.numpy().flatten()))
+            edge_type_choice = np.random.choice(a = list(range(20*(num_nodes-1))),p = scores.cpu().data.numpy().flatten()/np.sum(scores.cpu().data.numpy().flatten()))
+
+            node_type_choice = edge_type_choice // 20
+            edge_type_choice = edge_type_choice % 20
+            if node_type_choice in edges_added:
+                break
+
+            edges_added.add(node_type_choice)
+
+            # add edge to graph
+            # G.add_edge( num_nodes,node_type_choice , bond_type = rdchem.BondType.values[edge_type_choice+1]  )
+            G.add_edge( num_nodes-1,int(node_type_choice) )
+            
+            seed_graph.edge_index = torch.cat([seed_graph.edge_index,torch.reshape(torch.tensor([node_type_choice,num_nodes-1]).to(device),(2,1))],dim=1)
+            edge_data = torch.zeros(1,20).to(device)
+            edge_data[ 0, edge_type_choice ] = 1
+            edge_data = torch.cat([ edge_data,torch.zeros(1,27).to(device)],dim = 1)
+            seed_graph.edge_attr = torch.cat([seed_graph.edge_attr,edge_data],dim=0)
+            # print(seed_graph.x)
+            # print(seed_graph.edge_attr)
+            # print(seed_graph.edge_index)
+            print("--------Adding Edge------")
+            print(seed_graph)
+            draw_graph(G)
+
+
+            add_edge = model.f_addedge(h_G,new_node_embedding)
+            add_edge_choice = np.random.choice(a = list(range(2)),p = add_edge.cpu().data.numpy())
+
+        # nx.draw(G)
+        h_G = model.R(seed_graph)
+
+        node_type = model.f_addnode(h_G)
+        node_type_choice = np.random.choice(a = list(range(115)),p = node_type.cpu().data.numpy())
+    return (G,seed_graph)
+
+def sample_MAP(model):
+    G = nx.Graph()
+    seed_graph = Data()
+    
+    seed_graph = nx_to_torch_geom(read_molecule_nx('C'))
+
+    seed_graph.edge_attr = torch.zeros((0,47),dtype=torch.float)
+    seed_graph.edge_index = torch.zeros((2,0),dtype=torch.long)
+    G.add_node (0,atomic_num = 6, element = ele(6).symbol)
+    print("--------Initial Graph------")
+    print(seed_graph)
+    draw_graph(G)
+    
+
+    seed_graph.to(device)
+
+    h_G = model.R(seed_graph)
+
+    node_type = model.f_addnode(h_G)
+
+    num_nodes = 1
+
+    node_type_choice = np.argmax(node_type.cpu().data.numpy())
+
+    while num_nodes < 40 and node_type_choice != 114:
+
+        G.add_node(num_nodes,atomic_num = node_type_choice+1,zaib = ele(int(node_type_choice)+1).symbol)
+
+        new_node_embedding = model.new_node(seed_graph,node_type[:-1])
+
+        # add new node to graph
+        temp = seed_graph.x
+        seed_graph.x = torch.cat([seed_graph.x,torch.reshape(new_node_embedding,(1,new_node_embedding.size()[0]))],dim=0)
+        num_nodes += 1
+
+        print("--------Adding Node------")
+        print(seed_graph)
+        draw_graph(G)
+
+        # decide whether to add edge or not.
+        add_edge = model.f_addedge(h_G,new_node_embedding)
+        add_edge_choice = np.random.choice(a = list(range(2)),p = add_edge.cpu().data.numpy())
+        edges_added = set()
+        while add_edge_choice != 1:
+            scores = model.f_nodes(temp,new_node_embedding)
+
+            # print(np.sum(scores.cpu().data.numpy().flatten()))
+            edge_type_choice = np.random.choice(a = list(range(20*(num_nodes-1))),p = scores.cpu().data.numpy().flatten()/np.sum(scores.cpu().data.numpy().flatten()))
+
+            node_type_choice = edge_type_choice // 20
+            edge_type_choice = edge_type_choice % 20
+            if node_type_choice in edges_added:
+                break
+
+            edges_added.add(node_type_choice)
+
+            # add edge to graph
+            # G.add_edge( num_nodes,node_type_choice , bond_type = rdchem.BondType.values[edge_type_choice+1]  )
+            G.add_edge( num_nodes-1,int(node_type_choice) )
+            
+            seed_graph.edge_index = torch.cat([seed_graph.edge_index,torch.reshape(torch.tensor([node_type_choice,num_nodes-1]).to(device),(2,1))],dim=1)
+            edge_data = torch.zeros(1,20).to(device)
+            edge_data[ 0, edge_type_choice ] = 1
+            edge_data = torch.cat([ edge_data,torch.zeros(1,27).to(device)],dim = 1)
+            seed_graph.edge_attr = torch.cat([seed_graph.edge_attr,edge_data],dim=0)
+            # print(seed_graph.x)
+            # print(seed_graph.edge_attr)
+            # print(seed_graph.edge_index)
+            print("--------Adding Edge------")
+            print(seed_graph)
+            draw_graph(G)
+
+
+            add_edge = model.f_addedge(h_G,new_node_embedding)
+            add_edge_choice = np.random.choice(a = list(range(2)),p = add_edge.cpu().data.numpy())
+
+        # nx.draw(G)
+        h_G = model.R(seed_graph)
+
+        node_type = model.f_addnode(h_G)
+        node_type_choice = np.argmax(node_type.cpu().data.numpy())
+    return (G,seed_graph)
